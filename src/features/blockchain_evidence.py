@@ -35,6 +35,7 @@ import time
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from datetime import datetime
+from datetime import timezone
 import uuid
 import secrets
 
@@ -109,7 +110,7 @@ class BlockchainNode:
     
     def _create_genesis_block(self):
         """Create the first block in the chain"""
-        creation_time = datetime.now().isoformat()
+        creation_time = datetime.now(timezone.utc).isoformat()
         genesis = {
             'block_number': 0,
             'timestamp': creation_time,
@@ -148,7 +149,7 @@ class BlockchainNode:
         """Add transaction to pending pool"""
         tx_hash = hashlib.sha256(json.dumps(transaction, sort_keys=True).encode()).hexdigest()
         transaction['tx_hash'] = tx_hash
-        transaction['timestamp'] = datetime.now().isoformat()
+        transaction['timestamp'] = datetime.now(timezone.utc).isoformat()
         self.pending_transactions.append(transaction)
         return tx_hash
     
@@ -158,7 +159,7 @@ class BlockchainNode:
             return None
         
         previous_block = self.chain[-1]
-        creation_time = datetime.now().isoformat()
+        creation_time = datetime.now(timezone.utc).isoformat()
         
         block = {
             'block_number': len(self.chain),
@@ -326,7 +327,7 @@ class BlockchainEvidenceManager:
         
         # Evidence record
         evidence_id = f"EV_{secrets.token_hex(6).upper()}"
-        detection_timestamp = datetime.now().isoformat() + 'Z'
+        detection_timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         
         evidence_data = {
             'evidence_id': evidence_id,
@@ -427,7 +428,7 @@ class BlockchainEvidenceManager:
             block_hash="",
             previous_block_hash="",
             validator_signatures=[],
-            consensus_timestamp=datetime.now().isoformat(),
+            consensus_timestamp=datetime.now(timezone.utc).isoformat(),
             finality_time_ms=0.0,
         )
     
@@ -515,7 +516,7 @@ class BlockchainEvidenceManager:
                         
                         export = {
                             'case_number': case_number,
-                            'export_timestamp': datetime.now().isoformat(),
+                            'export_timestamp': datetime.now(timezone.utc).isoformat(),
                             'evidence': tx,
                             'block_metadata': {
                                 'block_number': block['block_number'],
