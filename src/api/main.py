@@ -725,6 +725,7 @@ async def lifespan(app: FastAPI):
         },
     )
     asyncio.ensure_future(_honeypot_auto_release_loop())
+    if not INNOVATIONS_AVAILABLE:
         print("⚠ Innovation modules not available")
     
     print("=" * 80)
