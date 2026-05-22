@@ -37,11 +37,13 @@ class FocalLoss(nn.Module):
         alpha: float = 0.25,
         gamma: float = 2.0,
         reduction: str = 'mean',
+        from_logits: bool = True,
     ):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
         self.reduction = reduction
+        self.from_logits = from_logits
     
     def forward(
         self,
@@ -57,7 +59,7 @@ class FocalLoss(nn.Module):
             Focal loss value
         """
         # Ensure inputs are probabilities
-        if inputs.min() < 0 or inputs.max() > 1:
+        if self.from_logits:
             p = torch.sigmoid(inputs)
         else:
             p = inputs
