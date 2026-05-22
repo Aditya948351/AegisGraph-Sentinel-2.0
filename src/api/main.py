@@ -917,7 +917,7 @@ async def get_stats():
     summary="Check transaction for fraud",
     description="Analyze a single transaction for fraud risk using HTGNN and behavioral biometrics"
 )
-async def check_transaction(request: TransactionCheckRequest):
+def check_transaction(request: TransactionCheckRequest):
     """
     Check a single transaction for fraud
     
@@ -1304,7 +1304,7 @@ if os.getenv("DEBUG", "false").lower() == "true":
     summary="Check multiple transactions",
     description="Batch processing of multiple transactions for fraud detection"
 )
-async def check_batch_transactions(request: BatchTransactionRequest):
+def check_batch_transactions(request: BatchTransactionRequest):
     """
     Check multiple transactions in batch
     
@@ -1319,7 +1319,7 @@ async def check_batch_transactions(request: BatchTransactionRequest):
     for txn_request in request.transactions:
         try:
             # Process each transaction
-            result = await check_transaction(txn_request)
+            result = check_transaction(txn_request)
             results.append(result)
             stats[result.decision.upper()] += 1
         except Exception as e:
