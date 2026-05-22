@@ -259,10 +259,10 @@ except (ImportError, SyntaxError) as e:
                                 event_type="graph_pattern",
                                 metadata={"pattern": "chain", "chain_length": chain_length},
                             )
-                except:
-                            print(f"⚠️ Chain pattern: {source_account} is part of a {chain_length}-hop chain")
                 except Exception as e:
                     logger.error(f"Error: {e}")
+                except:
+                            print(f"⚠️ Chain pattern: {source_account} is part of a {chain_length}-hop chain")
                     pass
         
         graph_risk = min(graph_risk, 1.0)
