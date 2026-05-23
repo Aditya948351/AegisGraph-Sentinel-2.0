@@ -107,7 +107,7 @@ DEVICE=cpu
 # Model Path
 MODEL_PATH=models/htgnn_best.pt
 
-# GPU Configuration (for Docker/container deployment)
+# GPU Configuration
 CUDA_VISIBLE_DEVICES=0
 ```
 
@@ -120,7 +120,7 @@ CUDA_VISIBLE_DEVICES=0
 - `LOG_LEVEL`: Logging level for application logs (default: INFO)
 - `DEVICE`: Computation device - cpu, cuda, or mps (default: cpu)
 - `MODEL_PATH`: Path to the model checkpoint (default: models/htgnn_best.pt)
-- `CUDA_VISIBLE_DEVICES`: GPU device IDs for Docker/container deployments (default: 0)
+- `CUDA_VISIBLE_DEVICES`: GPU device IDs (default: 0)
 
 The application will validate that all required environment variables are set on startup and raise a clear error if any are missing.
 
@@ -331,20 +331,9 @@ pytest --cov=src tests/
 
 ## 🚢 Deployment
 
-### Docker Deployment
-
+Run the API server directly:
 ```bash
-# Build Docker image
-docker build -t aegisgraph-sentinel:2.0 .
-
-# Run container
-docker run -p 8000:8000 aegisgraph-sentinel:2.0
-```
-
-### Kubernetes Deployment
-
-```bash
-kubectl apply -f k8s/deployment.yaml
+python -m src.api.main
 ```
 
 
