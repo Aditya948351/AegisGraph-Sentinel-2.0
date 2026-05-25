@@ -40,6 +40,13 @@ import uuid
 import secrets
 import threading
 import pathlib
+import os
+
+try:
+    import redis
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
 
 
 @dataclass
@@ -270,6 +277,82 @@ class EvidenceJournal:
         return len(self.read_all())
 
 
+class RedisLedger:
+    """
+    Redis-backed shared ledger for multi-worker evidence storage.
+
+    Replaces per-process in-memory chain so all Uvicorn workers share
+    one authoritative evidence store. Falls back to no-op if Redis is
+    unavailable so the journal (Phase 1) still catches everything.
+
+    Keys used:
+      aegis:evidence:<evidence_id>   -> JSON blob of one evidence record
+      aegis:evidence:index           -> Redis list of all evidence_ids (ordered)
+      aegis:stats:total_sealed       -> atomic integer counter
+      aegis:block:latest             -> JSON blob of last sealed block metadata
+    """
+
+    PREFIX = "aegis"
+
+    def __init__(self, redis_url: str = None):
+        self._client = None
+        if not REDIS_AVAILABLE:
+            return
+        url = redis_url or os.getenv("AEGIS_REDIS_URL", "redis://localhost:6379/0")
+        try:
+            self._client = redis.Redis.from_url(
+                url,
+                decode_responses=True,
+                socket_timeout=2,
+            )
+            self._client.ping()
+        except Exception:
+            self._client = None  # fall back silently; journal is the safety net
+
+    @property
+    def available(self) -> bool:
+        return self._client is not None
+
+    def save_evidence(self, evidence: "BlockchainEvidence") -> None:
+        """Persist one evidence record and append its ID to the index."""
+        if not self.available:
+            return
+        key = f"{self.PREFIX}:evidence:{evidence.evidence_id}"
+        self._client.set(key, json.dumps(asdict(evidence), default=str))
+        self._client.rpush(f"{self.PREFIX}:evidence:index", evidence.evidence_id)
+        self._client.incr(f"{self.PREFIX}:stats:total_sealed")
+
+    def load_evidence(self, evidence_id: str) -> dict | None:
+        """Load one evidence record by ID."""
+        if not self.available:
+            return None
+        raw = self._client.get(f"{self.PREFIX}:evidence:{evidence_id}")
+        return json.loads(raw) if raw else None
+
+    def total_sealed(self) -> int:
+        """Return the authoritative sealed count across all workers."""
+        if not self.available:
+            return 0
+        val = self._client.get(f"{self.PREFIX}:stats:total_sealed")
+        return int(val) if val else 0
+
+    def save_block_metadata(self, block: dict) -> None:
+        """Store latest block metadata for cross-worker verification."""
+        if not self.available:
+            return
+        self._client.set(
+            f"{self.PREFIX}:block:latest",
+            json.dumps(block, default=str),
+        )
+
+    def load_block_metadata(self) -> dict | None:
+        """Load latest block metadata."""
+        if not self.available:
+            return None
+        raw = self._client.get(f"{self.PREFIX}:block:latest")
+        return json.loads(raw) if raw else None
+
+
 class BlockchainEvidenceManager:
     """
     Manages blockchain evidence sealing for fraud detection decisions
@@ -307,9 +390,15 @@ class BlockchainEvidenceManager:
         # Durable evidence journal - persists across restarts
         self._journal = EvidenceJournal()
 
-        # Restore stats counter from journal so restarts don't reset to zero
+        # Shared Redis ledger - authoritative across all Uvicorn workers
+        self._redis = RedisLedger()
+
+        # Restore stats counter from durable stores so restarts don't reset to zero
         _prior_count = self._journal.count()
-        if _prior_count > 0:
+        _redis_count = self._redis.total_sealed()
+        if _redis_count > 0:
+            self.stats['total_sealed'] = _redis_count
+        elif _prior_count > 0:
             self.stats['total_sealed'] = _prior_count
     
     def _initialize_network(self) -> List[BlockchainNode]:
@@ -463,6 +552,8 @@ class BlockchainEvidenceManager:
                     print(f"⛓️ BLOCKCHAIN SEALED: {evidence_id} ({total_time:.1f}ms) ⚠️ Over target")
                 
                 self._journal.append(evidence)
+                self._redis.save_evidence(evidence)
+                self._redis.save_block_metadata(block)
                 return evidence
         
         # Fallback: create evidence without blockchain
@@ -489,6 +580,7 @@ class BlockchainEvidenceManager:
             finality_time_ms=0.0,
         )
         self._journal.append(_fallback_evidence)
+        self._redis.save_evidence(_fallback_evidence)
         return _fallback_evidence
     
     def verify_evidence(
@@ -606,6 +698,9 @@ class BlockchainEvidenceManager:
     
     def get_statistics(self) -> Dict:
         """Get blockchain statistics"""
+        # Prefer Redis count (authoritative across workers) over in-process counter
+        if self._redis.available:
+            self.stats['total_sealed'] = self._redis.total_sealed()
         self.stats['chain_verified'] = all(
             node.verify_chain_integrity() for node in self.nodes[:6]
         )
@@ -613,6 +708,7 @@ class BlockchainEvidenceManager:
             **self.stats,
             'total_nodes': len(self.nodes),
             'blockchain_enabled': self.enable_blockchain,
+            'redis_connected': self._redis.available,
         }
 
 
