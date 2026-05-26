@@ -295,8 +295,19 @@ class ProductionRiskScorer:
         """
         Compute temporal risk (unusual time of day, new account, etc.).
         """
-        # Check if transaction at unusual hours
-        txn_time = datetime.fromisoformat(transaction['timestamp'].isoformat())
+        timestamp = transaction.get('timestamp')
+        if isinstance(timestamp, str):
+            try:
+                txn_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            except ValueError:
+                return 0.2
+        elif isinstance(timestamp, (int, float)):
+            txn_time = datetime.fromtimestamp(timestamp)
+        elif hasattr(timestamp, 'isoformat'):
+            txn_time = datetime.fromisoformat(timestamp.isoformat())
+        else:
+            return 0.2
+
         hour = txn_time.hour
         
         # High risk: 2am-4am (common fraud window)
