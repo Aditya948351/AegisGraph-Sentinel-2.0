@@ -208,162 +208,152 @@ with st.sidebar:
 if page == "🧭 Command Center":
     st.header("🧭 Real-Time Command Center")
     
-    col1, col2, col3, col4 = st.columns(4)
+    # Live Mode Toggle
+    live_mode = st.toggle("🔴 Enable Live Event Stream", value=False, key="live_mode_toggle")
     
+    if 'live_events' not in st.session_state:
+        st.session_state.live_events = []
+        
     try:
         response = requests.get(f"{API_URL}/stats", timeout=5)
-        if response.status_code == 200:
-            stats = response.json()
-            total_requests = stats.get('total_requests', 0)
-            decisions = stats.get('decisions', {})
-            flagged = decisions.get('REVIEW', 0) + decisions.get('BLOCK', 0)
+        stats = response.json() if response.status_code == 200 else {}
+    except:
+        stats = {}
+        
+    # Generate a live event if active
+    if live_mode:
+        import random
+        import time
+        # Create a mock transaction to send to the backend
+        accounts = ["ACC" + str(random.randint(1000, 9999)), "mule_acc_001", "ACC" + str(random.randint(1000, 9999))]
+        txn = {
+            "transaction_id": f"LIVE_{int(time.time()*1000)}",
+            "source_account": random.choice(accounts),
+            "target_account": random.choice(accounts),
+            "amount": float(random.choice([500, 2500, 50000, 150000, 300000])),
+            "currency": "INR",
+            "mode": random.choice(["UPI", "IMPS"]),
+            "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
+        }
+        try:
+            start_t = time.time()
+            resp = requests.post(f"{API_URL}/api/v1/fraud/check", json=txn, timeout=2)
+            latency = int((time.time() - start_t) * 1000)
+            if resp.status_code == 200:
+                result = resp.json()
+                event = {
+                    "time": datetime.now().strftime("%H:%M:%S"),
+                    "id": txn["transaction_id"],
+                    "amount": txn["amount"],
+                    "decision": result.get("decision", "ALLOW"),
+                    "risk": result.get("risk_score", 0.0),
+                    "latency": latency,
+                    "explanation": result.get("explanation", ""),
+                    "breakdown": result.get("breakdown", {})
+                }
+                st.session_state.live_events.insert(0, event)
+                # Keep last 15
+                st.session_state.live_events = st.session_state.live_events[:15]
+        except Exception as e:
+            pass
+
+    # Metrics
+    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+    total_reqs = stats.get('total_requests', len(st.session_state.live_events))
+    flagged = stats.get('decisions', {}).get('REVIEW', 0) + stats.get('decisions', {}).get('BLOCK', 0)
+    flag_rate = (flagged / max(total_reqs, 1)) * 100
+    
+    with m_col1:
+        st.metric("Total Checks", total_reqs, delta="Live")
+    with m_col2:
+        st.metric("Flagged", flagged, delta=f"{flag_rate:.1f}%")
+    with m_col3:
+        recent_lat = st.session_state.live_events[0]['latency'] if st.session_state.live_events else stats.get('avg_processing_time_ms', 0)
+        st.metric("Avg Response", f"{recent_lat:.1f}ms", delta="Fast")
+    with m_col4:
+        uptime_hours = stats.get('uptime_seconds', 0) / 3600
+        st.metric("Uptime", f"{uptime_hours:.1f}h", delta="Stable")
+        
+    st.markdown("---")
+    
+    # Realtime Visualizations
+    col_main, col_side = st.columns([2, 1])
+    
+    with col_main:
+        st.subheader("📡 Live Fraud Event Stream")
+        if not st.session_state.live_events:
+            st.info("Live stream inactive. Toggle above to begin simulating transactions.")
+        else:
+            df_events = pd.DataFrame(st.session_state.live_events)
+            display_df = df_events[['time', 'id', 'amount', 'decision', 'risk', 'latency']].copy()
+            display_df['amount'] = display_df['amount'].apply(lambda x: f"₹{x:,.0f}")
+            display_df['risk'] = display_df['risk'].apply(lambda x: f"{x:.1%}")
+            display_df['latency'] = display_df['latency'].apply(lambda x: f"{x}ms")
             
-            with col1:
-                st.metric("Total Checks", total_requests, delta="Live")
-            with col2:
-                flag_rate = (flagged / max(total_requests, 1)) * 100
-                st.metric("Flagged", flagged, delta=f"{flag_rate:.1f}%")
-            with col3:
-                st.metric("Avg Response", f"{stats.get('avg_processing_time_ms', 0):.1f}ms", delta="Fast")
-            with col4:
-                uptime_hours = stats.get('uptime_seconds', 0) / 3600
-                st.metric("Uptime", f"{uptime_hours:.1f}h", delta="Stable")
+            def highlight_decision(val):
+                if val == 'BLOCK':
+                    return 'background-color: rgba(255, 107, 107, 0.2); color: #ff6b6b; font-weight: bold;'
+                elif val == 'REVIEW':
+                    return 'background-color: rgba(255, 215, 0, 0.2); color: #ffd700; font-weight: bold;'
+                return 'background-color: rgba(144, 238, 144, 0.2); color: #90ee90;'
             
-            # Quick Test Section
-            st.markdown("---")
-            st.subheader("⚡ Quick Transaction Test")
-
-            # Initialize session state for quick test
-            if 'quick_test_result' not in st.session_state:
-                st.session_state.quick_test_result = None
-            if 'quick_test_error' not in st.session_state:
-                st.session_state.quick_test_error = None
-
-            # Compact input form (keeps captions and session-state behavior)
-            with st.form("quick_transaction_test", clear_on_submit=False):
-                quick_cols = st.columns([1.3, 1, 0.9])
-                with quick_cols[0]:
-                    st.number_input(
-                        "Amount",
-                        min_value=1.0,
-                        max_value=1000000.0,
-                        value=5000.0,
-                        step=100.0,
-                        format="%.2f",
-                        key="quick_amount_input",
-                    )
-                    st.caption("₹ transaction value to score")
-                with quick_cols[1]:
-                    st.selectbox("Mode", ["UPI", "IMPS", "NEFT", "RTGS"], index=0, key="quick_mode_input")
-                    st.caption("Payment rail")
-                with quick_cols[2]:
-                    st.write("")
-                    st.write("")
-                    submitted = st.form_submit_button("🔎 Scan Now", use_container_width=True)
-
-            if submitted:
-                # Reset previous state
-                st.session_state.quick_test_result = None
-                st.session_state.quick_test_error = None
-
-                current_amount = st.session_state.get("quick_amount_input", 5000.0)
-                current_mode = st.session_state.get("quick_mode_input", "UPI")
-
-                with st.spinner("Analyzing..."):
-                    txn = {
-                        "transaction_id": f"QUICK_{int(time.time())}",
-                        "source_account": "quick_test_user",
-                        "target_account": "test_merchant",
-                        "amount": float(current_amount),
-                        "currency": "INR",
-                        "mode": current_mode,
-                        "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
-                    }
-
-                    try:
-                        response = requests.post(f"{API_URL}/api/v1/fraud/check", json=txn, timeout=15)
-                        response.raise_for_status()
-                        st.session_state.quick_test_result = response.json()
-                    except requests.exceptions.RequestException as e:
-                        st.session_state.quick_test_error = f"API Error: {str(e)}"
-                    except Exception as e:
-                        st.session_state.quick_test_error = f"Error: {str(e)}"
-
-            # Display result if exists
-            if st.session_state.quick_test_result:
-                result = st.session_state.quick_test_result
-                risk_score = result.get('risk_score', 0)
-                decision = result.get('decision', 'UNKNOWN')
-
-                st.markdown("---")
-                col_a, col_b, col_c = st.columns(3)
-
-                with col_a:
-                    st.metric("Risk Score", f"{risk_score:.3f}")
-                with col_b:
-                    color = "🟢" if decision == "ALLOW" else "🟡" if decision == "REVIEW" else "🔴"
-                    st.metric("Decision", f"{color} {decision}")
-                with col_c:
-                    conf = result.get('confidence', 0.85)
-                    st.metric("Confidence", f"{conf:.1%}")
-
-                # Risk Gauge
-                fig = go.Figure(go.Indicator(
-                    mode="gauge+number+delta",
-                    value=risk_score * 100,
-                    domain={'x': [0, 1], 'y': [0, 1]},
-                    title={'text': "Risk Level", 'font': {'size': 24}},
-                    delta={'reference': 50, 'increasing': {'color': "red"}},
-                    gauge={
-                        'axis': {'range': [None, 100], 'tickwidth': 1, 'tickcolor': "darkblue"},
-                        'bar': {'color': "darkblue"},
-                        'bgcolor': "white",
-                        'borderwidth': 2,
-                        'bordercolor': "gray",
-                        'steps': [
-                            {'range': [0, 40], 'color': '#90EE90'},
-                            {'range': [40, 70], 'color': '#FFD700'},
-                            {'range': [70, 100], 'color': '#FF6B6B'}
-                        ],
-                        'threshold': {
-                            'line': {'color': "red", 'width': 4},
-                            'thickness': 0.75,
-                            'value': 90
-                        }
-                    }
-                ))
-                fig.update_layout(height=300)
+            # Note: Pandas Styler applymap was deprecated in Pandas 2.1.0, replaced by map
+            st.dataframe(
+                display_df.style.map(highlight_decision, subset=['decision']),
+                use_container_width=True,
+                height=400
+            )
+            
+            st.subheader("📈 Realtime Risk Density (Heatmap)")
+            if len(st.session_state.live_events) > 2:
+                fig = px.area(df_events[::-1], x='time', y='risk', color='decision',
+                             color_discrete_map={'ALLOW': '#90EE90', 'REVIEW': '#FFD700', 'BLOCK': '#FF6B6B'},
+                             title='Live Risk Timeline')
+                fig.update_layout(height=250, margin=dict(l=0, r=0, t=30, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Show risk breakdown - use 'breakdown' key (API returns breakdown)
-                breakdown = result.get('breakdown', {})
-                if breakdown:
-                    st.subheader("📊 Risk Breakdown")
-                    breakdown_cols = st.columns(len(breakdown))
-                    for idx, (component, value) in enumerate(breakdown.items()):
-                        with breakdown_cols[idx]:
-                            st.metric(component.title(), f"{value:.2%}")
-
-                st.info(f"💡 {result.get('explanation', 'No explanation available')}")
-                st.success("✅ Transaction analyzed successfully!")
-
-                # Clear result button
-                if st.button("Clear Result", key="clear_quick_result"):
-                    st.session_state.quick_test_result = None
-                    st.rerun()
-
-            # Display error if exists
-            if st.session_state.quick_test_error:
-                st.error(st.session_state.quick_test_error)
-                if st.button("Clear Error", key="clear_quick_error"):
-                    st.session_state.quick_test_error = None
-                    st.rerun()
-        
+    with col_side:
+        st.subheader("🧠 Aegis-Oracle Explainability")
+        if st.session_state.live_events:
+            latest = st.session_state.live_events[0]
+            
+            fig_gauge = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=latest['risk'] * 100,
+                domain={'x': [0, 1], 'y': [0, 1]},
+                title={'text': "Current Risk Level", 'font': {'size': 18}},
+                gauge={
+                    'axis': {'range': [None, 100]},
+                    'bar': {'color': "darkblue"},
+                    'steps': [
+                        {'range': [0, 40], 'color': '#90EE90'},
+                        {'range': [40, 70], 'color': '#FFD700'},
+                        {'range': [70, 100], 'color': '#FF6B6B'}
+                    ]
+                }
+            ))
+            fig_gauge.update_layout(height=200, margin=dict(l=20, r=20, t=30, b=0))
+            st.plotly_chart(fig_gauge, use_container_width=True)
+            
+            st.markdown("**Decision Breakdown**")
+            bd = latest.get('breakdown', {})
+            st.progress(float(min(bd.get('graph', 0), 1.0)), text=f"Graph Anomaly ({bd.get('graph',0):.1%})")
+            st.progress(float(min(bd.get('velocity', 0), 1.0)), text=f"Velocity Risk ({bd.get('velocity',0):.1%})")
+            st.progress(float(min(bd.get('behavior', 0), 1.0)), text=f"Behavioral Stress ({bd.get('behavior',0):.1%})")
+            st.progress(float(min(bd.get('entropy', 0), 1.0)), text=f"Entropy Risk ({bd.get('entropy',0):.1%})")
+            
+            if latest['decision'] == 'BLOCK':
+                st.error(latest['explanation'])
+            elif latest['decision'] == 'REVIEW':
+                st.warning(latest['explanation'])
+            else:
+                st.success(latest['explanation'])
         else:
-            st.error("Unable to fetch statistics")
-    
-    except Exception as e:
-        st.error(f"Error connecting to API: {e}")
+            st.write("Awaiting transactions...")
+
+    if live_mode:
+        time.sleep(1.5)
+        st.rerun()
 
 # Page: Single Transaction Check
 elif page == "💳 Transaction Scan":
