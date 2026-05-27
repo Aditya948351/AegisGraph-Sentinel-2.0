@@ -29,6 +29,8 @@ State of Maharashtra vs. Ramesh Kumar, 2026
 - Evidence ruled admissible → Conviction secured
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import time
@@ -262,6 +264,67 @@ class EvidenceJournal:
         self._path = pathlib.Path(journal_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self._records_by_evidence_id: dict[str, dict] = {}
+        self._latest_block_number = 0
+        self._index_loaded = False
+        self._cache_mtime_ns = 0
+        self._record_count = 0
+
+    def _refresh_cache_from_disk(self) -> None:
+        """Rebuild the in-memory journal index from the append-only file."""
+        if not self._path.exists():
+            with self._lock:
+                self._records_by_evidence_id.clear()
+                self._latest_block_number = 0
+                self._index_loaded = True
+                self._cache_mtime_ns = 0
+                self._record_count = 0
+            return
+
+        records_by_id: dict[str, dict] = {}
+        latest_block = 0
+        count = 0
+        with self._path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                evidence_id = record.get("evidence_id")
+                if evidence_id:
+                    records_by_id[evidence_id] = record
+                latest_block = max(latest_block, int(record.get("block_number", 0)))
+                count += 1
+
+        with self._lock:
+            self._records_by_evidence_id = records_by_id
+            self._latest_block_number = latest_block
+            self._record_count = count
+            self._index_loaded = True
+            self._cache_mtime_ns = self._path.stat().st_mtime_ns
+
+    def _ensure_index_loaded(self) -> None:
+        """Reload the in-memory index if the journal changed on disk."""
+        if not self._path.exists():
+            with self._lock:
+                if not self._index_loaded:
+                    self._index_loaded = True
+                self._records_by_evidence_id.clear()
+                self._latest_block_number = 0
+                self._cache_mtime_ns = 0
+                self._record_count = 0
+            return
+
+        current_mtime_ns = self._path.stat().st_mtime_ns
+        with self._lock:
+            if self._index_loaded and current_mtime_ns == self._cache_mtime_ns:
+                return
+
+        self._refresh_cache_from_disk()
 
     def append(self, evidence: "BlockchainEvidence") -> None:
         """Atomically append one evidence record to the journal."""
@@ -273,40 +336,35 @@ class EvidenceJournal:
         with self._lock:
             with self._path.open("a", encoding="utf-8") as fh:
                 fh.write(line)
+            self._records_by_evidence_id[record["evidence_id"]] = record
+            self._latest_block_number = max(self._latest_block_number, int(record.get("block_number", 0)))
+            self._record_count += 1
+            self._index_loaded = True
+            self._cache_mtime_ns = self._path.stat().st_mtime_ns
 
     def read_all(self) -> list:
         """Read all records from the journal (used on startup)."""
-        if not self._path.exists():
-            return []
-        records = []
+        self._ensure_index_loaded()
         with self._lock:
-            with self._path.open("r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line:
-                        try:
-                            records.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass  # skip corrupted lines
-        return records
+            return list(self._records_by_evidence_id.values())
 
     def count(self) -> int:
         """Return number of journaled records."""
-        return len(self.read_all())
+        self._ensure_index_loaded()
+        with self._lock:
+            return self._record_count
 
     def load_evidence(self, evidence_id: str) -> dict | None:
         """Load one evidence record from the journal by ID."""
-        for record in reversed(self.read_all()):
-            if record.get('evidence_id') == evidence_id:
-                return record
-        return None
+        self._ensure_index_loaded()
+        with self._lock:
+            return self._records_by_evidence_id.get(evidence_id)
 
     def latest_block_number(self) -> int:
         """Return the highest block number recorded in the journal."""
-        latest = 0
-        for record in self.read_all():
-            latest = max(latest, int(record.get('block_number', 0)))
-        return latest
+        self._ensure_index_loaded()
+        with self._lock:
+            return self._latest_block_number
 
 
 class RedisLedger:
@@ -603,6 +661,10 @@ class BlockchainEvidenceManager:
             )
 
         return attestations
+
+    def _authorized_validator_ids(self) -> set[str]:
+        """Return the trusted validator identities participating in quorum."""
+        return {node.node_id for node in self.nodes[1:6] if node.is_validator}
     
     def seal_evidence(
         self,
@@ -832,11 +894,42 @@ class BlockchainEvidenceManager:
                         and previous_hash == evidence.get('previous_block_hash')
                     )
 
-            verification['consensus_verified'] = len(evidence.get('validator_signatures', [])) >= 5
+            authorized_validators = self._authorized_validator_ids()
+            block_hash = (block or {}).get('hash') or evidence.get('block_hash')
+            unique_validators = set()
+            invalid_signatures = []
 
-        verification['consensus_nodes'] = (
-            len(evidence.get('validator_signatures', [])) if evidence else 0
-        )
+            for entry in evidence.get('validator_signatures', []) or []:
+                node_id, _, signature = entry.partition(':')
+                if not node_id or not signature:
+                    invalid_signatures.append(entry)
+                    continue
+                if node_id in unique_validators:
+                    invalid_signatures.append(entry)
+                    continue
+                if node_id not in authorized_validators or not block_hash:
+                    invalid_signatures.append(entry)
+                    continue
+
+                expected_signature = hashlib.sha256(
+                    f"{node_id}_{block_hash}".encode()
+                ).hexdigest()[:16]
+                if signature != expected_signature:
+                    invalid_signatures.append(entry)
+                    continue
+
+                unique_validators.add(node_id)
+
+            verification['consensus_nodes'] = len(unique_validators)
+            verification['consensus_verified'] = (
+                len(unique_validators) >= 5 and not invalid_signatures
+            )
+            verification['validator_provenance_verified'] = (
+                len(unique_validators) >= 5 and not invalid_signatures
+            )
+            verification['invalid_validator_signatures'] = invalid_signatures
+
+        verification['consensus_nodes'] = verification.get('consensus_nodes', 0)
         verification['original_timestamp'] = (
             evidence.get('consensus_timestamp')
             if evidence
@@ -854,8 +947,11 @@ class BlockchainEvidenceManager:
             'block_exists': verification['block_exists'],
             'chain_integrity': verification['chain_integrity'],
             'consensus_verified': verification['consensus_verified'],
+            'validator_provenance_verified': verification.get('validator_provenance_verified', False),
             'timestamp_verified': verification['timestamp_verified'],
             'consensus_nodes': verification['consensus_nodes'],
+            'invalid_validator_signatures': verification.get('invalid_validator_signatures', []),
+            'authorized_validators': sorted(self._authorized_validator_ids()),
             'storage_backend': evidence.get('_storage') if evidence else None,
             'block_hash': evidence.get('block_hash') if evidence else None,
         }
