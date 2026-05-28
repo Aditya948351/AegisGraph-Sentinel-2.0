@@ -8,14 +8,24 @@ Each attack class is tested for:
     - Edge cases (zero budget, max budget) behave correctly
 """
 from __future__ import annotations
-import torch
+import pytest
 
-from src.adversarial.base import AttackConfig
-from src.adversarial.attacks import EdgeAddition, EdgeDeletion, FeaturePerturbation
+# Handle optional torch dependency
+try:
+    import torch
+    from src.adversarial.base import AttackConfig
+    from src.adversarial.attacks import EdgeAddition, EdgeDeletion, FeaturePerturbation, NodeInjection
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
+pytestmark = pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not installed")
 
 
-def _build_graph(num_nodes=30, num_edges=60, feature_dim=32, seed=0):
-    gen = torch.Generator().manual_seed(seed)
+if TORCH_AVAILABLE:
+
+    def _build_graph(num_nodes=30, num_edges=60, feature_dim=32, seed=0):
+        gen = torch.Generator().manual_seed(seed)
     return {
         "x": torch.randn(num_nodes, feature_dim, generator=gen),
         "edge_index": torch.randint(0, num_nodes, (2, num_edges), generator=gen),
