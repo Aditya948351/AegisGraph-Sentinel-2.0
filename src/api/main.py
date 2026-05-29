@@ -572,8 +572,8 @@ except (ImportError, SyntaxError) as e:
                 except Exception as e:
                     _api_logger.error(f"Error in graph pattern analysis: {e}")
                     pass
-                except:
-                    print(f"⚠️ Chain pattern: {source_account} is part of a {chain_length}-hop chain")
+                except Exception:
+                    print(f"⚠️ Chain pattern: {source_account} is part of a {chain_length} hop chain")
         
         graph_risk = min(graph_risk, 1.0)
         breakdown['graph'] = graph_risk
