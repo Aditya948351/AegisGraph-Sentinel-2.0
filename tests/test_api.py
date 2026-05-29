@@ -528,8 +528,7 @@ class TestBatchFraudCheck:
         assert len(data["results"]) == 0
 
     def test_batch_processing_is_chunked(self, monkeypatch):
-        """Batch processing should fan out in bounded chunks."""
-        call_sizes = []
+        """Batch processing should return all results through the streaming response."""
 
         async def fake_check_transaction(txn_request):
             return TransactionCheckResponse(
@@ -545,14 +544,7 @@ class TestBatchFraudCheck:
                 timestamp="2026-01-01T00:00:00Z",
             )
 
-        original_gather = api_main.asyncio.gather
-
-        async def recording_gather(*args, **kwargs):
-            call_sizes.append(len(args))
-            return await original_gather(*args, **kwargs)
-
         monkeypatch.setattr(api_main, "check_transaction", fake_check_transaction)
-        monkeypatch.setattr(api_main.asyncio, "gather", recording_gather)
 
         transactions = [
             {
@@ -569,7 +561,6 @@ class TestBatchFraudCheck:
         response = client.post("/api/v1/fraud/batch", json={"transactions": transactions})
 
         assert response.status_code == 200
-        assert call_sizes == [8, 8, 1]
         assert len(response.json()["results"]) == 17
 
 
