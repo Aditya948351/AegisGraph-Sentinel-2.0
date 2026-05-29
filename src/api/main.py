@@ -215,9 +215,6 @@ def _build_health_response(include_details: bool) -> dict[str, Any]:
         }
     )
     return response
-from ..exceptions import register_exception_handlers, register_observability_middleware
-from ..observability import get_audit_logger, get_logger
-from ..core import register_core_services, register_graph_services, register_innovation_services
 
 _api_logger = get_logger("api")
 _audit_logger = get_audit_logger()
