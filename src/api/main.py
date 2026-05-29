@@ -471,9 +471,9 @@ except (ImportError, SyntaxError) as e:
         event_type="innovation_import_fallback",
     )
     LATERAL_MOVEMENT_AVAILABLE = False
-       
-    # Demo mode functions
-    def compute_risk_score(transaction: dict, biometrics: dict = None, **kwargs) -> dict:
+
+# Demo mode functions
+def compute_risk_score(transaction: dict, biometrics: dict = None, **kwargs) -> dict:
         """Enhanced risk scorer with graph-based mule account detection"""
         risk_score = 0.0
         breakdown = {
