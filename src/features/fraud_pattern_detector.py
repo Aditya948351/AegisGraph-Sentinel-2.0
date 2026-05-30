@@ -207,39 +207,43 @@ class FraudPatternDetector:
         Returns:
             List of detected hubs with risk scores
         """
-        # Count incoming transfers per account
-        incoming_counts = defaultdict(list)
-        
+        # Single pass: collect transfers while incrementally aggregating
+        incoming_counts: Dict[str, List[Dict]] = defaultdict(list)
+        source_sets: Dict[str, set] = defaultdict(set)
+        amount_sums: Dict[str, float] = defaultdict(float)
+
         for txn in transactions:
             target = self._txn_value(txn, 'target_account')
             if target:
                 incoming_counts[target].append(txn)
-        
+                source_sets[target].add(self._txn_value(txn, 'source_account'))
+                amount_sums[target] += self._txn_value(txn, 'amount', 0)
+
         detected_hubs = []
-        
+
         for account, transfers in incoming_counts.items():
-            if len(transfers) >= threshold_incoming:
-                # Risk factors
-                unique_sources = len(set(self._txn_value(t, 'source_account') for t in transfers))
-                avg_amount = np.mean([self._txn_value(t, 'amount', 0) for t in transfers])
-                
+            num_transfers = len(transfers)
+            if num_transfers >= threshold_incoming:
+                unique_sources = len(source_sets[account])
+                avg_amount = amount_sums[account] / num_transfers
+
                 hub_score = self._score_fan_in_hub(
                     account,
                     transfers,
                     unique_sources,
                     avg_amount,
                 )
-                
+
                 detected_hubs.append({
                     'type': 'FAN_IN_HUB',
                     'account': account,
-                    'incoming_transfer_count': len(transfers),
+                    'incoming_transfer_count': num_transfers,
                     'unique_sources': unique_sources,
                     'avg_transfer_amount': avg_amount,
-                    'total_received': sum(self._txn_value(t, 'amount', 0) for t in transfers),
+                    'total_received': amount_sums[account],
                     'risk_score': hub_score,
                 })
-        
+
         return sorted(detected_hubs, key=lambda x: x['risk_score'], reverse=True)
     
     def detect_fan_out_hubs(
