@@ -35,6 +35,54 @@ def _enable_real_api_key_gate(monkeypatch):
     api_main.app.dependency_overrides.pop(require_api_key, None)
 
 
+@pytest.mark.parametrize(
+    ("decision", "expected", "warns"),
+    [
+        (api_main.FraudDecision.ALLOW.value, api_main.FraudDecision.ALLOW.value, False),
+        (api_main.FraudDecision.REVIEW.value, api_main.FraudDecision.REVIEW.value, False),
+        (api_main.FraudDecision.BLOCK.value, api_main.FraudDecision.BLOCK.value, False),
+        (None, api_main.FraudDecision.REVIEW.value, True),
+        ("UNKNOWN", api_main.FraudDecision.REVIEW.value, True),
+        ("BLOCKED", api_main.FraudDecision.REVIEW.value, True),
+        ("", api_main.FraudDecision.REVIEW.value, True),
+        (123, api_main.FraudDecision.REVIEW.value, True),
+    ],
+)
+def test_normalize_decision_fails_safe(monkeypatch, decision, expected, warns):
+    warning_mock = Mock()
+    monkeypatch.setattr(api_main._api_logger, "warning", warning_mock)
+
+    assert api_main._normalize_decision(decision) == expected
+
+    if warns:
+        warning_mock.assert_called_once()
+        assert warning_mock.call_args.kwargs["event_type"] == "decision_normalization_warning"
+        assert warning_mock.call_args.kwargs["metadata"] == {"decision": str(decision)}
+    else:
+        warning_mock.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected"),
+    [
+        (api_main.FraudDecision.ALLOW.value, "approve"),
+        (api_main.FraudDecision.REVIEW.value, "review"),
+        (api_main.FraudDecision.BLOCK.value, "block"),
+        ("UNKNOWN", "review"),
+    ],
+)
+def test_decision_to_api_value_uses_review_for_invalid_values(monkeypatch, decision, expected):
+    warning_mock = Mock()
+    monkeypatch.setattr(api_main._api_logger, "warning", warning_mock)
+
+    assert api_main._decision_to_api_value(decision) == expected
+
+    if decision == "UNKNOWN":
+        warning_mock.assert_called_once()
+    else:
+        warning_mock.assert_not_called()
+
+
 def test_health_smoke(api_client):
     response = api_client.get("/health")
     assert response.status_code == 200
