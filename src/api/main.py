@@ -60,6 +60,21 @@ except ImportError as e:
 
             return decorator
 
+    except ImportError as e:
+    SLOWAPI_AVAILABLE = False
+
+    class RateLimitExceeded(Exception):
+        pass
+
+    class Limiter:
+        def __init__(self, *args, **kwargs):
+            self.key_func = kwargs.get("key_func")
+
+        def limit(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+
     class SlowAPIMiddleware:
         def __init__(self, app, *args, **kwargs):
             self.app = app
@@ -68,24 +83,24 @@ except ImportError as e:
             await self.app(scope, receive, send)
 
     def get_remote_address(request) -> str:
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        ips = [ip.strip() for ip in forwarded_for.split(",")]
-        if ips and ips[0]:
-            return ips[0]
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            ips = [ip.strip() for ip in forwarded_for.split(",")]
+            if ips and ips[0]:
+                return ips[0]
 
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip and real_ip.strip():
-        return real_ip.strip()
+        real_ip = request.headers.get("X-Real-IP")
+        if real_ip and real_ip.strip():
+            return real_ip.strip()
 
-    client = getattr(request, "client", None)
-    return getattr(client, "host", "unknown")
-
+        client = getattr(request, "client", None)
+        return getattr(client, "host", "unknown")
 
     async def _rate_limit_exceeded_handler(request, exc):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     print(f"SlowAPI not available ({e}); rate limiting disabled")
+
 
 from ..config.settings import get_settings
 from ..config.validation import validate_environment
