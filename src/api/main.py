@@ -1354,21 +1354,13 @@ def _initialize_innovation_runtime(startup_logger):
     # move this to the lazy provider pattern if full consistency
     # is preferred.
     if LATERAL_MOVEMENT_AVAILABLE:
-        try:
-            from src.features.lateral_movement import LateralMovementDetector
-            _lmd = LateralMovementDetector()
-            state.services.register_service("lateral_movement_detector", _lmd, replace=True)
-            lateral_movement_detector = _lmd
-            state.runtime.health_monitor.register_service("lateral_movement_detector")
-            state.runtime.health_monitor.mark_healthy("lateral_movement_detector")
-            startup_logger.info("Lateral Movement Detector initialized", event_type="innovation_ready")
-        except Exception as e:
-            state.runtime.health_monitor.register_service("lateral_movement_detector")
-            state.runtime.health_monitor.mark_failed("lateral_movement_detector", error=str(e))
-            startup_logger.warning(
-                f"Lateral movement initialization failed: {e}",
-                event_type="innovation_init_failed",
-            )
+        # NOTE: LateralMovementDetector is intentionally deferred
+        # to first request via get_lateral_movement_detector() in
+        # src/api/dependencies/subsystems.py. Construction is
+        # guarded by an asyncio.Lock to prevent double-init.
+        state.runtime.health_monitor.register_service(
+            "lateral_movement_detector"
+        )
     else:
         startup_logger.warning("Innovation modules not available", event_type="innovations_unavailable")
 
