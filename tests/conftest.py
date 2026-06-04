@@ -47,7 +47,7 @@ def pytest_collection_modifyitems(config, items):
 
 # Files whose tests should exercise the real API key gate. The autouse
 # bypass below skips these so the gate is active during those tests.
-_AUTH_TEST_FILES = frozenset({"test_api_auth.py"})
+_AUTH_TEST_FILES = frozenset({"test_api_auth.py", "test_rbac.py"})
 
 
 @pytest.fixture
@@ -101,3 +101,8 @@ def _reset_global_rate_limiter():
     """Reset rate limits before each test."""
     from src.api.validators import reset_rate_limiter
     reset_rate_limiter()
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
