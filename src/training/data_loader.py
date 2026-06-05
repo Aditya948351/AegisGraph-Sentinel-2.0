@@ -1,5 +1,4 @@
 import hashlib
-import io
 import os
 
 import torch
@@ -26,14 +25,15 @@ class AegisGraphLoader:
         if not expected_hash:
             raise RuntimeError("AEGIS_GRAPH_SHA256 is unset; refusing to load graph artifact")
 
+        hasher = hashlib.sha256()
         with open(self.graph_path, "rb") as f:
-            buf = f.read()
-
-        actual_hash = hashlib.sha256(buf).hexdigest()
-        if actual_hash != expected_hash:
-            raise RuntimeError("Graph artifact hash mismatch; refusing to load")
-
-        data = torch.load(io.BytesIO(buf), weights_only=True)
+            for chunk in iter(lambda: f.read(65536), b""):
+                hasher.update(chunk)
+            actual_hash = hasher.hexdigest()
+            if actual_hash != expected_hash:
+                raise RuntimeError("Graph artifact hash mismatch; refusing to load")
+            f.seek(0)
+            data = torch.load(f, weights_only=True)
         
         # PyG Temporal Sampling requires a 'time' attribute on the target nodes.
         # If our synthetic graph didn't explicitly define node timestamps, we mock them sequentially.
