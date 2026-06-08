@@ -47,7 +47,7 @@ class LRUCache(OrderedDict):
 import networkx as nx
 import numpy as np
 import uvicorn
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from .websocket_manager import WebSocketManager
@@ -174,6 +174,17 @@ from .schemas import (
     ClusterDetailResponse,
     GraphStatsResponse,
     RiskPropagationNode,
+    # Predictive Intelligence (Phase 12)
+    SimulationScenarioRequest,
+    SimulationScenarioResponse,
+    SimulationResultResponse,
+    ForecastRequest,
+    ForecastResultResponse,
+    RiskTrendResponse,
+    CampaignPredictionResponse,
+    AttackPathResponse,
+    RecommendationResponse,
+    PredictiveStatsResponse,
 )
 from ..case_management import get_case_store
 from ..case_management.models import CasePriority, CaseStatus, EvidenceType, validate_status_transition
@@ -3550,6 +3561,342 @@ async def detect_fraud_rings(
         "total_clusters": result.total_clusters,
         "high_risk_clusters": result.high_risk_clusters,
         "algorithm_used": result.algorithm_used.value,
+        "processing_time_ms": processing_time,
+    }
+
+
+# =============================================================================
+# Predictive Intelligence Endpoints
+# =============================================================================
+
+@app.post(
+    "/api/v1/predictive/simulate",
+    tags=["Predictive Intelligence"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Run a fraud simulation",
+)
+async def run_fraud_simulation(
+    request: SimulationScenarioRequest,
+):
+    """Run a fraud simulation to predict outcomes and risk."""
+    import time
+    from src.predictive_intelligence import (
+        get_fraud_simulator,
+        get_scenario_builder,
+    )
+    from src.predictive_intelligence.models import SimulationType
+    
+    start_time = time.time()
+    
+    simulator = get_fraud_simulator()
+    builder = get_scenario_builder()
+    
+    # Parse simulation type
+    try:
+        sim_type = SimulationType(request.simulation_type.upper())
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid simulation type: {request.simulation_type}"
+        )
+    
+    # Build scenario
+    scenario = builder.build_scenario(
+        simulation_type=sim_type,
+        source_entity_ids=request.source_entity_ids,
+        parameters=request.parameters,
+        use_template=request.use_template,
+    )
+    
+    # Run simulation
+    result = simulator.simulate(scenario)
+    
+    processing_time = (time.time() - start_time) * 1000
+    
+    return {
+        "scenario": {
+            "scenario_id": scenario.scenario_id,
+            "simulation_type": scenario.simulation_type.value,
+            "source_entity_ids": scenario.source_entity_ids,
+            "parameters": scenario.parameters,
+            "status": scenario.status.value,
+            "created_at": scenario.created_at.isoformat(),
+            "created_by": scenario.created_by,
+        },
+        "result": {
+            "scenario_id": result.scenario_id,
+            "predicted_outcomes": result.predicted_outcomes,
+            "risk_score": result.risk_score,
+            "affected_entities": result.affected_entities[:100],
+            "confidence": result.confidence,
+            "processing_time_ms": result.processing_time_ms,
+            "timestamp": result.timestamp.isoformat(),
+        },
+        "processing_time_ms": processing_time,
+    }
+
+
+@app.get(
+    "/api/v1/predictive/forecast",
+    tags=["Predictive Intelligence"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Forecast risk for an entity",
+)
+async def forecast_risk(
+    entity_id: str = Query(..., description="Entity ID to forecast"),
+    current_risk: float = Query(0.0, ge=0.0, le=1.0, description="Current risk score"),
+    period: str = Query("DAY_1", description="Forecast period"),
+):
+    """Forecast future risk for an entity."""
+    import time
+    from src.predictive_intelligence import get_risk_forecaster
+    from src.predictive_intelligence.models import ForecastPeriod
+    
+    start_time = time.time()
+    
+    forecaster = get_risk_forecaster()
+    
+    # Parse period
+    try:
+        forecast_period = ForecastPeriod(period.upper())
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid period: {period}")
+    
+    # Generate forecast
+    forecast = forecaster.forecast_risk(entity_id, current_risk, forecast_period)
+    
+    # Also get trend
+    trend = forecaster.predict_risk_trend(entity_id, current_risk)
+    
+    processing_time = (time.time() - start_time) * 1000
+    
+    return {
+        "forecast": {
+            "entity_id": forecast.entity_id,
+            "forecast_period": forecast.forecast_period.value,
+            "risk_score": forecast.risk_score,
+            "confidence": forecast.confidence,
+            "factors": forecast.factors,
+            "recommendations": forecast.recommendations,
+            "timestamp": forecast.timestamp.isoformat(),
+        },
+        "trend": {
+            "entity_id": trend.entity_id,
+            "current_risk": trend.current_risk,
+            "predicted_risk": trend.predicted_risk,
+            "risk_trend": trend.risk_trend,
+            "time_to_peak": trend.time_to_peak,
+            "confidence": trend.confidence,
+            "timestamp": trend.timestamp.isoformat(),
+        },
+        "processing_time_ms": processing_time,
+    }
+
+
+@app.get(
+    "/api/v1/predictive/campaigns",
+    tags=["Predictive Intelligence"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Get campaign predictions",
+)
+async def get_campaign_predictions(
+    growth_threshold: float = Query(0.0, ge=0.0, le=1.0, description="Growth rate threshold"),
+    limit: int = Query(50, ge=1, le=200, description="Maximum results"),
+):
+    """Get campaign predictions, optionally filtered by growth rate."""
+    import time
+    from src.predictive_intelligence import get_campaign_predictor
+    
+    start_time = time.time()
+    
+    predictor = get_campaign_predictor()
+    
+    if growth_threshold > 0:
+        campaigns = predictor.get_high_growth_campaigns(growth_threshold)
+    else:
+        campaigns = predictor.get_all_campaigns()
+    
+    processing_time = (time.time() - start_time) * 1000
+    
+    return {
+        "campaigns": [
+            {
+                "campaign_id": c.campaign_id,
+                "campaign_name": c.campaign_name,
+                "predicted_status": c.predicted_status.value,
+                "growth_rate": c.growth_rate,
+                "affected_entities": c.affected_entities[:50],
+                "peak_time": c.peak_time.isoformat() if c.peak_time else None,
+                "confidence": c.confidence,
+                "timestamp": c.timestamp.isoformat(),
+            }
+            for c in campaigns[:limit]
+        ],
+        "total_campaigns": len(campaigns),
+        "processing_time_ms": processing_time,
+    }
+
+
+@app.get(
+    "/api/v1/predictive/attack-paths",
+    tags=["Predictive Intelligence"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Predict attack paths",
+)
+async def predict_attack_paths(
+    entity_id: str = Query(..., description="Source entity ID"),
+    depth: int = Query(3, ge=1, le=10, description="Prediction depth"),
+    probability_threshold: float = Query(0.0, ge=0.0, le=1.0, description="Probability threshold"),
+):
+    """Predict attack paths from an entity."""
+    import time
+    from src.predictive_intelligence import get_attack_path_predictor
+    
+    start_time = time.time()
+    
+    predictor = get_attack_path_predictor()
+    
+    # Generate attack path prediction
+    prediction = predictor.predict_attack_path(entity_id, depth=depth)
+    
+    # Get all paths for this entity
+    all_paths = predictor.get_attack_paths(entity_id)
+    
+    processing_time = (time.time() - start_time) * 1000
+    
+    return {
+        "predictions": [
+            {
+                "source_entity_id": p.source_entity_id,
+                "predicted_path": p.predicted_path,
+                "probability": p.probability,
+                "estimated_damage": p.estimated_damage,
+                "confidence": p.confidence,
+                "timestamp": p.timestamp.isoformat(),
+            }
+            for p in all_paths if p.probability >= probability_threshold
+        ],
+        "total_predictions": len(all_paths),
+        "processing_time_ms": processing_time,
+    }
+
+
+@app.get(
+    "/api/v1/predictive/recommendations",
+    tags=["Predictive Intelligence"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Get prevention recommendations",
+)
+async def get_prevention_recommendations(
+    priority: str = Query("HIGH", description="Minimum priority: CRITICAL, HIGH, MEDIUM, LOW"),
+    entity_id: Optional[str] = Query(None, description="Filter by entity ID"),
+):
+    """Get prevention recommendations based on priority."""
+    import time
+    from src.predictive_intelligence import get_recommendation_engine
+    from src.predictive_intelligence.models import RecommendationPriority
+    
+    start_time = time.time()
+    
+    engine = get_recommendation_engine()
+    
+    # Parse priority
+    try:
+        min_priority = RecommendationPriority(priority.upper())
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid priority: {priority}")
+    
+    if entity_id:
+        recommendations = engine.get_entity_recommendations(entity_id)
+    else:
+        recommendations = engine.get_high_priority_recommendations(min_priority)
+    
+    processing_time = (time.time() - start_time) * 1000
+    
+    return {
+        "recommendations": [
+            {
+                "recommendation_id": r.recommendation_id,
+                "entity_id": r.entity_id,
+                "recommendation_type": r.recommendation_type.value,
+                "priority": r.priority.value,
+                "description": r.description,
+                "expected_impact": r.expected_impact,
+                "timestamp": r.timestamp.isoformat(),
+            }
+            for r in recommendations
+        ],
+        "total_recommendations": len(recommendations),
+        "processing_time_ms": processing_time,
+    }
+
+
+@app.post(
+    "/api/v1/predictive/recommendations/generate",
+    tags=["Predictive Intelligence"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Generate prevention recommendations",
+)
+async def generate_recommendations(
+    entity_id: str = Body(..., description="Entity ID"),
+    risk_score: float = Body(0.0, ge=0.0, le=1.0, description="Risk score"),
+    risk_factors: List[str] = Body(default=[], description="Risk factors"),
+):
+    """Generate prevention recommendations for an entity."""
+    import time
+    from src.predictive_intelligence import get_recommendation_engine
+    
+    start_time = time.time()
+    
+    engine = get_recommendation_engine()
+    
+    recommendation = engine.generate_recommendation(
+        entity_id=entity_id,
+        risk_score=risk_score,
+        risk_factors=risk_factors,
+    )
+    
+    processing_time = (time.time() - start_time) * 1000
+    
+    return {
+        "recommendation": {
+            "recommendation_id": recommendation.recommendation_id,
+            "entity_id": recommendation.entity_id,
+            "recommendation_type": recommendation.recommendation_type.value,
+            "priority": recommendation.priority.value,
+            "description": recommendation.description,
+            "expected_impact": recommendation.expected_impact,
+            "timestamp": recommendation.timestamp.isoformat(),
+        },
+        "processing_time_ms": processing_time,
+    }
+
+
+@app.get(
+    "/api/v1/predictive/stats",
+    tags=["Predictive Intelligence"],
+    dependencies=[Depends(require_role(Role.ANALYST))],
+    summary="Get predictive intelligence statistics",
+)
+async def get_predictive_stats():
+    """Get statistics about predictive intelligence data."""
+    import time
+    from src.predictive_intelligence import get_predictive_store
+    
+    start_time = time.time()
+    
+    store = get_predictive_store()
+    stats = store.get_stats()
+    
+    processing_time = (time.time() - start_time) * 1000
+    
+    return {
+        "total_simulations": stats.get("simulations_stored", 0),
+        "total_forecasts": stats.get("forecasts_stored", 0),
+        "total_campaigns": stats.get("campaigns_stored", 0),
+        "total_recommendations": stats.get("recommendations_stored", 0),
+        "current_scenarios": stats.get("current_scenarios", 0),
+        "current_campaigns": stats.get("current_campaigns", 0),
         "processing_time_ms": processing_time,
     }
 

@@ -1073,3 +1073,110 @@ class GraphStatsResponse(BaseModel):
     graph_density: float
     graph_connected_components: int
     processing_time_ms: float
+
+
+# =============================================================================
+# Predictive Intelligence Schemas
+# =============================================================================
+
+class SimulationScenarioRequest(BaseModel):
+    """Request to create a simulation scenario."""
+    simulation_type: str
+    source_entity_ids: List[str] = []
+    parameters: Dict[str, Any] = {}
+    use_template: bool = True
+
+
+class SimulationScenarioResponse(BaseModel):
+    """Response containing simulation scenario."""
+    scenario_id: str
+    simulation_type: str
+    source_entity_ids: List[str]
+    parameters: Dict[str, Any]
+    status: str
+    created_at: str
+    created_by: str
+
+
+class SimulationResultResponse(BaseModel):
+    """Response containing simulation result."""
+    scenario_id: str
+    predicted_outcomes: List[Dict[str, Any]]
+    risk_score: float
+    affected_entities: List[str]
+    confidence: float
+    processing_time_ms: float
+    timestamp: str
+
+
+class ForecastRequest(BaseModel):
+    """Request to forecast risk."""
+    entity_id: str
+    current_risk: float
+    forecast_period: str = "DAY_1"
+
+
+class ForecastResultResponse(BaseModel):
+    """Response containing forecast result."""
+    entity_id: str
+    forecast_period: str
+    risk_score: float
+    confidence: float
+    factors: List[Dict[str, Any]]
+    recommendations: List[str]
+    timestamp: str
+
+
+class RiskTrendResponse(BaseModel):
+    """Response containing risk trend forecast."""
+    entity_id: str
+    current_risk: float
+    predicted_risk: float
+    risk_trend: str
+    time_to_peak: Optional[str]
+    confidence: float
+    timestamp: str
+
+
+class CampaignPredictionResponse(BaseModel):
+    """Response containing campaign prediction."""
+    campaign_id: str
+    campaign_name: str
+    predicted_status: str
+    growth_rate: float
+    affected_entities: List[str]
+    peak_time: Optional[str]
+    confidence: float
+    timestamp: str
+
+
+class AttackPathResponse(BaseModel):
+    """Response containing attack path prediction."""
+    source_entity_id: str
+    predicted_path: List[str]
+    probability: float
+    estimated_damage: float
+    confidence: float
+    timestamp: str
+
+
+class RecommendationResponse(BaseModel):
+    """Response containing prevention recommendation."""
+    recommendation_id: str
+    entity_id: str
+    recommendation_type: str
+    priority: str
+    description: str
+    expected_impact: float
+    timestamp: str
+
+
+class PredictiveStatsResponse(BaseModel):
+    """Response containing predictive intelligence statistics."""
+    total_simulations: int
+    total_forecasts: int
+    total_campaigns: int
+    total_recommendations: int
+    current_scenarios: int
+    current_campaigns: int
+    processing_time_ms: float
