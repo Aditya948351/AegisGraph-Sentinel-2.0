@@ -11,6 +11,7 @@ The Oracle pattern: Combine model reasoning with LLM narrative generation.
 """
 
 import json
+import logging
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
