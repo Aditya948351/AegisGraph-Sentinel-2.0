@@ -5145,7 +5145,7 @@ async def get_analytics_stats():
 
 _identity_federation_service = None
 
-def get_identity_federation_service() -> "IdentityFederationService":
+def get_identity_federation_service():
     global _identity_federation_service
     if _identity_federation_service is None:
         from src.identity_federation import IdentityFederationService
