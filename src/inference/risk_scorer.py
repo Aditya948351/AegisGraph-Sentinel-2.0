@@ -379,6 +379,7 @@ def compute_risk_score(
     config: Optional[dict] = None,
     subgraph_cache: Optional[Dict] = None,
     subgraph_cache_lock: Optional[Lock] = None,
+    centrality_lock: Optional[Lock] = None,
 ) -> Dict[str, float]:
     """
     Enhanced risk scorer with graph-based mule account detection
@@ -422,7 +423,9 @@ def compute_risk_score(
                 else getattr(api_state, "account_profiles", {})
             )
             config = config if config is not None else getattr(api_state, "config", {})
-        except Exception:
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("Failed to load graph state from api_state: %s", exc)
             graph_loaded = False
 
     mule_accounts = mule_accounts or set()
@@ -571,11 +574,13 @@ def compute_risk_score(
                 if source_account in centrality:
                     current_score = centrality[source_account]
                     
-                    # Get or initialize baseline
-                    if source_account not in centrality_baseline:
-                        centrality_baseline[source_account] = []
-                    
-                    baseline_history = centrality_baseline[source_account]
+                    # Get or initialize baseline (thread-safe)
+                    lock = centrality_lock or Lock()
+                    with lock:
+                        if source_account not in centrality_baseline:
+                            centrality_baseline[source_account] = []
+                        
+                        baseline_history = centrality_baseline[source_account]
                     
                     if len(baseline_history) >= 3:
                         baseline_avg = np.mean(baseline_history)
@@ -600,10 +605,11 @@ def compute_risk_score(
                                 },
                             )
                     
-                    # Update baseline (rolling window)
-                    baseline_history.append(current_score)
-                    if len(baseline_history) > centrality_window_size:
-                        baseline_history.pop(0)
+                    # Update baseline (rolling window, thread-safe)
+                    with lock:
+                        baseline_history.append(current_score)
+                        if len(baseline_history) > centrality_window_size:
+                            baseline_history.pop(0)
                         
             except Exception as e:
                 pass
@@ -695,28 +701,22 @@ def compute_risk_score(
     entropy_risk = min(entropy_risk, 1.0)
     breakdown['entropy'] = entropy_risk
 
-    try:
-        threshold_data = load_thresholds('config/thresholds.yaml', validate=True)
-        rs = threshold_data.get('risk_scoring', {})
-        thresholds = {
-            'allow': rs.get('allow', config_defaults.DEFAULT_RISK_THRESHOLDS["allow"]),
-            'review': rs.get('review', config_defaults.DEFAULT_RISK_THRESHOLDS["review"]),
-            'block': rs.get('block', config_defaults.DEFAULT_RISK_THRESHOLDS["block"]),
-        }
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        thresholds = config.get('risk_scoring', {}).get('thresholds', {
-            'allow': config_defaults.DEFAULT_RISK_THRESHOLDS["allow"],
-            'review': config_defaults.DEFAULT_RISK_THRESHOLDS["review"],
-            'block': config_defaults.DEFAULT_RISK_THRESHOLDS["block"],
-        })
-
-    component_weights = {
-        'graph': config_defaults.DEFAULT_COMPONENT_WEIGHTS["graph"],
-        'velocity': config_defaults.DEFAULT_COMPONENT_WEIGHTS["velocity"],
-        'behavior': config_defaults.DEFAULT_COMPONENT_WEIGHTS["behavior"],
-        'entropy': config_defaults.DEFAULT_COMPONENT_WEIGHTS["entropy"],
+    rs = config.get('risk_scoring', {})
+    caller_thresholds = rs.get('thresholds', {})
+    thresholds = {
+        'allow': caller_thresholds.get('allow', config_defaults.DEFAULT_RISK_THRESHOLDS["allow"]),
+        'review': caller_thresholds.get('review', config_defaults.DEFAULT_RISK_THRESHOLDS["review"]),
+        'block': caller_thresholds.get('block', config_defaults.DEFAULT_RISK_THRESHOLDS["block"]),
     }
+
+    caller_weights = rs.get('weights', {})
+    component_weights = {
+        'graph': caller_weights.get('graph', config_defaults.DEFAULT_COMPONENT_WEIGHTS["graph"]),
+        'velocity': caller_weights.get('velocity', config_defaults.DEFAULT_COMPONENT_WEIGHTS["velocity"]),
+        'behavior': caller_weights.get('behavior', config_defaults.DEFAULT_COMPONENT_WEIGHTS["behavior"]),
+        'entropy': caller_weights.get('entropy', config_defaults.DEFAULT_COMPONENT_WEIGHTS["entropy"]),
+    }
+
     central_thresholds = ThresholdConfig(thresholds=thresholds)
     central_scorer = CentralRiskScorer(
         threshold_config=central_thresholds,

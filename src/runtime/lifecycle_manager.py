@@ -8,6 +8,7 @@ import traceback
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, List
 
+from ..audit import log_audit_event
 from ..observability import get_logger
 from .events import RuntimeShutdownEvent, RuntimeStartedEvent
 from .events.subscriptions import register_default_subscriptions
@@ -34,6 +35,17 @@ class LifecycleManager:
         self._started = False
         self._shutting_down = False
 
+    def _audit(self, event_type: str, severity: str = "info", **metadata: Any) -> None:
+        try:
+            log_audit_event(
+                event_type=event_type,
+                severity=severity,
+                source="lifecycle_manager",
+                metadata=metadata,
+            )
+        except Exception:
+            self._logger.debug("Runtime audit recording failed", exc_info=True)
+
     def register_startup(self, name: str, handler: LifecycleCallable, *, critical: bool = True) -> None:
         self._startup_steps.append(LifecycleStep(name=name, handler=handler, critical=critical))
 
@@ -45,18 +57,28 @@ class LifecycleManager:
             if self._started:
                 self._logger.info("Startup already completed", event_type="runtime_startup_already_complete")
                 return
+            if self._shutting_down:
+                self._logger.warning("Cannot start while shutdown is in progress", event_type="runtime_startup_during_shutdown")
+                raise RuntimeError("Cannot start runtime while shutdown is in progress")
 
             self._logger.info(
                 "Runtime startup started",
                 event_type="runtime_startup_started",
                 metadata={"steps": [step.name for step in self._startup_steps]},
             )
+            self._audit("runtime_startup_started", steps=[step.name for step in self._startup_steps])
             self.runtime_state.shutting_down = False
+
+            # Wire default event subscriptions to the event bus
+            await register_default_subscriptions(self.runtime_state.event_bus)
 
             dispatcher = getattr(self.runtime_state, "dispatcher", None)
             if dispatcher is not None:
                 if not dispatcher.started:
                     await dispatcher.start()
+                # Validate dispatcher is actually started before proceeding
+                if not dispatcher.started:
+                    raise RuntimeError("Dispatcher failed to start during runtime startup")
                 self._logger.info("Event dispatcher started", event_type="dispatcher_started")
 
             completed_steps: List[str] = []
@@ -72,10 +94,12 @@ class LifecycleManager:
                 )
                 await self._rollback_startup(completed_steps)
                 raise
+            self._validate_runtime_services()
             self._started = True
             self.runtime_state.started = True
             self.runtime_state.record_lifecycle_event("startup_complete", steps=len(self._startup_steps))
             self._logger.info("Runtime startup complete", event_type="runtime_startup_complete")
+            self._audit("runtime_startup_complete", steps=len(self._startup_steps))
 
             # Emit RuntimeStartedEvent after all steps succeed.
             if dispatcher is not None and dispatcher.started:
@@ -85,6 +109,28 @@ class LifecycleManager:
                         payload={"steps": len(self._startup_steps)},
                     )
                 )
+
+
+    def _validate_runtime_services(self) -> None:
+        validator = getattr(self.runtime_state, "validate_runtime_dependencies", None)
+        if validator is None:
+            return
+        try:
+            results = validator()
+        except Exception as exc:
+            self._logger.warning(
+                f"Runtime dependency validation failed unexpectedly: {exc}",
+                event_type="runtime_dependency_validation_error",
+            )
+            return
+
+        failures = [result for result in results if not getattr(result, "valid", False)]
+        if failures:
+            self._logger.warning(
+                "Runtime dependency validation found failures",
+                event_type="runtime_dependency_validation_failed",
+                metadata={"failures": [failure.__dict__ for failure in failures]},
+            )
 
 
     async def shutdown(self) -> None:
@@ -102,12 +148,14 @@ class LifecycleManager:
                 event_type="runtime_shutdown_started",
                 metadata={"steps": [step.name for step in reversed(self._shutdown_steps)]},
             )
+            self._audit("runtime_shutdown_started", steps=[step.name for step in reversed(self._shutdown_steps)])
             for step in reversed(self._shutdown_steps):
                 await self._run_step(step, phase="shutdown")
             self._started = False
             self.runtime_state.started = False
             self.runtime_state.record_lifecycle_event("shutdown_complete", steps=len(self._shutdown_steps))
             self._logger.info("Runtime shutdown complete", event_type="runtime_shutdown_complete")
+            self._audit("runtime_shutdown_complete", steps=len(self._shutdown_steps))
 
             # Emit RuntimeShutdownEvent then stop the dispatcher so it
             # drains any remaining queued events before exiting.
@@ -144,6 +192,12 @@ class LifecycleManager:
         if dispatcher is not None and dispatcher.started:
             try:
                 await dispatcher.stop()
+                # Validate dispatcher actually stopped
+                if dispatcher.started:
+                    self._logger.error(
+                        "Dispatcher still reports started after stop during rollback",
+                        event_type="runtime_startup_rollback_dispatcher_state_error",
+                    )
             except Exception as exc:
                 self._logger.error(
                     f"Dispatcher stop during rollback failed: {exc}",

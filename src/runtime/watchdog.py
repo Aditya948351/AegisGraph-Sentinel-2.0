@@ -6,6 +6,7 @@ import asyncio
 import time
 from typing import Any, Optional
 
+from ..audit import log_audit_event
 from ..observability import get_logger
 from .events.event_types import WatchdogAlertEvent
 from .health_monitor import RuntimeHealthMonitor
@@ -34,11 +35,26 @@ class RuntimeWatchdog:
         self._logger = logger or _logger
         self._watchdog_task: Optional[asyncio.Task] = None
         self._dispatcher = dispatcher  # Optional[EventDispatcher]
+        self._running = False  # Explicit state flag
+
+    def _audit(self, event_type: str, severity: str = "warning", **metadata: Any) -> None:
+        try:
+            log_audit_event(
+                event_type=event_type,
+                severity=severity,
+                source="watchdog",
+                metadata=metadata,
+            )
+        except Exception:
+            self._logger.debug("Watchdog audit recording failed", exc_info=True)
 
     async def start(self, interval_seconds: float = 10.0) -> None:
         """Start the periodic watchdog loop."""
-        if self._watchdog_task is not None and not self._watchdog_task.done():
+        if self._running:
             self._logger.warning("Watchdog is already running", event_type="watchdog_already_running")
+            return
+        if self._watchdog_task is not None and not self._watchdog_task.done():
+            self._logger.warning("Watchdog task still exists from previous run", event_type="watchdog_task_exists")
             return
 
         async def _loop():
@@ -63,9 +79,12 @@ class RuntimeWatchdog:
                 raise
 
         self._watchdog_task = asyncio.create_task(_loop(), name="runtime_watchdog")
+        self._running = True
 
     async def stop(self) -> None:
         """Stop the periodic watchdog loop."""
+        if not self._running:
+            return
         if self._watchdog_task is not None and not self._watchdog_task.done():
             self._watchdog_task.cancel()
             try:
@@ -73,6 +92,7 @@ class RuntimeWatchdog:
             except asyncio.CancelledError:
                 pass
             self._watchdog_task = None
+        self._running = False
 
     async def validate_health(self) -> None:
         """Perform periodic health validation for heartbeats and active tasks."""
@@ -91,6 +111,7 @@ class RuntimeWatchdog:
                         event_type="watchdog_stale_heartbeat",
                         metadata={"service": name, "elapsed": elapsed},
                     )
+                    self._audit("watchdog_stale_heartbeat", service=name, elapsed=elapsed)
                     self.health_monitor.mark_failed(
                         name,
                         error=f"Stale heartbeat: no response in {elapsed:.1f} seconds"
@@ -132,6 +153,7 @@ class RuntimeWatchdog:
                             event_type="watchdog_dead_task",
                             metadata={"task": name},
                         )
+                        self._audit("watchdog_dead_task", task=name)
                         self.health_monitor.mark_failed(
                             name,
                             error="Dead task: background task has stopped running"
