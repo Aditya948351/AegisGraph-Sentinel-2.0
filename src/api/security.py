@@ -4,16 +4,65 @@ Centralised key-based authentication and role-aware authorization for
 AegisGraph Sentinel 2.0's HTTP surface. Keys are stored server-side as
 SHA-256 hashes rather than plaintext.
 
+Role Hierarchy
+--------------
+The following roles are supported, ordered from most- to least-privileged:
+
+    SUPER_ADMIN > ADMIN > (ANALYST | AUDITOR) > VIEWER
+
++-------------+-------------------------------------------+
+| Role        | Permitted operations                      |
++-------------+-------------------------------------------+
+| SUPER_ADMIN | All operations                            |
+| ADMIN       | Privileged ops: honeypot, memory diag,    |
+|             | blockchain export, legal evidence, case   |
+|             | status updates, debug endpoints           |
+| ANALYST     | Read/write detection endpoints: fraud     |
+|             | check, batch, explain, voice, mule,       |
+|             | blast-radius, alerts, blockchain seal,    |
+|             | case CRUD (non-destructive), oracle       |
+| AUDITOR     | Audit-trail access: stats, case timeline  |
+| VIEWER      | Read-only metadata: model info, evidence  |
+|             | verification                              |
++-------------+-------------------------------------------+
+
+HTTP error codes
+----------------
+- 401 Unauthorized  — key missing or unrecognised
+- 403 Forbidden     — key valid but role insufficient
+- 503 Unavailable   — server has no API keys configured
+
+Error response shape (JSON)::
+
+    {"error": {"code": 403, "message": "Insufficient permissions for this operation"}}
+
 Usage in route definitions::
 
     from fastapi import Depends
-    from .security import Role, require_role
+    from .security import Role, require_role, require_any_role, require_admin
 
+    # Require exactly one role (with inheritance):
     @app.post(
         "/api/v1/fraud/check",
         dependencies=[Depends(require_role(Role.ANALYST))],
     )
     async def check_transaction(...):
+        ...
+
+    # Accept any of several roles:
+    @app.get(
+        "/api/v1/cases",
+        dependencies=[Depends(require_any_role(Role.ANALYST, Role.AUDITOR))],
+    )
+    async def list_cases(...):
+        ...
+
+    # Admin-only shorthand:
+    @app.delete(
+        "/api/v1/cases/{case_id}",
+        dependencies=[Depends(require_admin())],
+    )
+    async def delete_case(...):
         ...
 
 Operators configure the service by exporting:
