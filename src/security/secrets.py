@@ -32,3 +32,4 @@ def is_sensitive_key(key: str) -> bool:
     if normalized in SENSITIVE_FIELD_NAMES:
         return True
     return any(part in _SENSITIVE_SINGLE_TOKENS for part in normalized.split("_"))
+disable_dummy_secrets = True
