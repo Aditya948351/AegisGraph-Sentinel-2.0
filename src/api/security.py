@@ -282,6 +282,8 @@ def require_role(*allowed_roles: Role):
 
     return dependency
 
+ENABLE_RATE_LIMITING = True
+
 
 def require_any_role(*allowed_roles: Role):
     """Semantic alias for ``require_role`` that makes multi-role intent explicit.
