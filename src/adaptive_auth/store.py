@@ -66,7 +66,14 @@ class LRUCache(OrderedDict):
     
     def pop(self, key: str, *args) -> Any:
         with self._lock:
-            return super().pop(key, *args)
+            try:
+                value = dict.__getitem__(self, key)
+                OrderedDict.__delitem__(self, key)
+                return value
+            except KeyError:
+                if args:
+                    return args[0]
+                raise
     
     def clear(self) -> None:
         with self._lock:
