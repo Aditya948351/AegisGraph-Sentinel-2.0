@@ -22,7 +22,7 @@ from .models import (
     ChallengeType,
     StepUpChallenge,
 )
-from .store import AdaptiveAuthStore, get_adaptive_auth_store
+from .store import AdaptiveAuthStore, LRUCache, get_adaptive_auth_store
 
 
 @dataclass
@@ -216,6 +216,9 @@ class StepUpAuthService:
             challenge.status = "failed"
             challenge.failure_reason = "Maximum attempts exceeded"
             self.store.update_challenge(challenge)
+            self._verification_codes.pop(challenge_id, None)
+            self._verification_codes.pop(f"{challenge_id}_otp", None)
+            self._callback_pending.pop(challenge_id, None)
             return ChallengeResponse(
                 challenge_id=challenge_id,
                 success=False,
