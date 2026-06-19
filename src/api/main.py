@@ -3038,6 +3038,7 @@ def _serialise_case(case) -> FraudCaseResponse:
 async def create_case(
     request: CreateCaseRequest,
     x_analyst_id: Optional[str] = Header(default="system", alias="X-Analyst-ID"),
+    x_tenant_id: str = Header(default="default", alias="X-Tenant-ID"),
 ):
     """Open a new fraud investigation case from a detected alert."""
     store = get_case_store()
@@ -3049,6 +3050,7 @@ async def create_case(
         analyst_id=x_analyst_id or "system",
         priority=priority,
         tags=request.tags or [],
+        tenant_id=x_tenant_id,
     )
     return _serialise_case(case)
 
@@ -3113,7 +3115,7 @@ async def get_case_dashboard():
 async def get_case(case_id: str):
     """Return full details of a specific fraud case."""
     store = get_case_store()
-    case = store.get_case(case_id)
+    case = store.get_case(case_id, tenant_id=x_tenant_id)
     if case is None:
         raise HTTPException(status_code=404, detail=f"Case '{case_id}' not found.")
     return _serialise_case(case)
@@ -3140,7 +3142,7 @@ async def update_case(
     store = get_case_store()
     analyst = x_analyst_id or "system"
     try:
-        case = store.get_case(case_id)
+        case = store.get_case(case_id, tenant_id=x_tenant_id)
         if case is None:
             raise HTTPException(status_code=404, detail=f"Case '{case_id}' not found.")
         if request.status:
@@ -3149,7 +3151,7 @@ async def update_case(
             store.assign_analyst(case_id, request.assigned_analyst, analyst)
         if request.priority:
             store.update_priority(case_id, CasePriority(request.priority), analyst)
-        case = store.get_case(case_id)
+        case = store.get_case(case_id, tenant_id=x_tenant_id)
         return _serialise_case(case)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
